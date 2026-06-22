@@ -60,41 +60,28 @@ export function getWeeklyRank(dimension: RankDimension = "composite"): CardRank[
   const cards = query<Card>("SELECT * FROM cards ORDER BY rarity DESC, basePrice DESC")
 
   const volumeData = query<{ cardId: string; totalVolume: number }>(
-    `SELECT cardId, SUM(quantity) as totalVolume 
-     FROM trades 
-     WHERE createdAt >= ? 
+    `SELECT cardId, SUM(quantity) as totalVolume
+     FROM trades
+     WHERE createdAt >= ?
      GROUP BY cardId`,
     [sevenDaysAgo]
   )
   const volumeMap = new Map(volumeData.map(v => [v.cardId, v.totalVolume]))
 
-  const priceData = query<{ cardId: string; price: number; createdAt: number }>(
-    `SELECT cardId, price, createdAt 
-     FROM trades 
-     WHERE createdAt >= ? 
-     ORDER BY cardId, createdAt ASC`,
+  const basePriceData = query<{ cardId: string; price: number }>(
+    `SELECT t.cardId, t.price
+     FROM trades t
+     INNER JOIN (
+       SELECT cardId, MAX(createdAt) as maxCreatedAt
+       FROM trades
+       WHERE createdAt < ?
+       GROUP BY cardId
+     ) pre7d ON t.cardId = pre7d.cardId AND t.createdAt = pre7d.maxCreatedAt`,
     [sevenDaysAgo]
   )
-  const priceMap = new Map<string, { first: number; last: number }>()
-  for (const p of priceData) {
-    if (!priceMap.has(p.cardId)) {
-      priceMap.set(p.cardId, { first: p.price, last: p.price })
-    } else {
-      const entry = priceMap.get(p.cardId)!
-      entry.last = p.price
-    }
-  }
+  const basePriceMap = new Map(basePriceData.map(p => [p.cardId, p.price]))
 
-  const ssrSupplyData = query<{ cardId: string; supply: number }>(
-    `SELECT uc.cardId, COUNT(*) as supply 
-     FROM user_cards uc
-     JOIN cards c ON uc.cardId = c.id
-     WHERE c.rarity = 'SSR'
-     GROUP BY uc.cardId`
-  )
-  const ssrSupplyMap = new Map(ssrSupplyData.map(s => [s.cardId, s.supply]))
-
-  const lastPriceData = query<{ cardId: string; price: number }>(
+  const latestPriceData = query<{ cardId: string; price: number }>(
     `SELECT t.cardId, t.price
      FROM trades t
      INNER JOIN (
@@ -103,18 +90,25 @@ export function getWeeklyRank(dimension: RankDimension = "composite"): CardRank[
        GROUP BY cardId
      ) latest ON t.cardId = latest.cardId AND t.createdAt = latest.maxCreatedAt`
   )
-  const lastPriceMap = new Map(lastPriceData.map(p => [p.cardId, p.price]))
+  const lastPriceMap = new Map(latestPriceData.map(p => [p.cardId, p.price]))
+
+  const ssrSupplyData = query<{ cardId: string; supply: number }>(
+    `SELECT uc.cardId, COUNT(*) as supply
+     FROM user_cards uc
+     JOIN cards c ON uc.cardId = c.id
+     WHERE c.rarity = 'SSR'
+     GROUP BY uc.cardId`
+  )
+  const ssrSupplyMap = new Map(ssrSupplyData.map(s => [s.cardId, s.supply]))
 
   const cardRanks: Omit<CardRank, "rank" | "volumeRank" | "gainRank" | "ssrSupplyRank" | "compositeRank">[] = []
 
   for (const card of cards) {
     const volume7d = volumeMap.get(card.id) ?? 0
-    const prices = priceMap.get(card.id)
-    const gainPercent = prices && prices.first > 0 
-      ? ((prices.last - prices.first) / prices.first) * 100 
-      : 0
-    const ssrSupply = card.rarity === "SSR" ? (ssrSupplyMap.get(card.id) ?? 0) : 0
+    const basePrice = basePriceMap.get(card.id) ?? card.basePrice
     const lastPrice = lastPriceMap.get(card.id) ?? card.basePrice
+    const gainPercent = basePrice > 0 ? ((lastPrice - basePrice) / basePrice) * 100 : 0
+    const ssrSupply = card.rarity === "SSR" ? (ssrSupplyMap.get(card.id) ?? 0) : 0
 
     const volumeScore = volume7d
     const gainScore = Math.max(gainPercent, -100)

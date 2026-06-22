@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
+import { useNavigate } from "react-router-dom"
 import { api } from "@/api"
 import { useAppStore } from "@/store"
 import type { CardRank, RankDimension } from "../../shared/types"
@@ -8,37 +9,40 @@ import { TrendingUp, TrendingDown, Minus, Trophy, Flame, ArrowUpRight, Coins } f
 const dimensionConfig: Record<RankDimension, { label: string; icon: React.ElementType; description: string }> = {
   composite: { label: "综合排名", icon: Trophy, description: "成交量40% + 涨幅35% + SSR流通数25%" },
   volume: { label: "成交量", icon: Flame, description: "7日累计成交数量" },
-  gain: { label: "涨幅", icon: ArrowUpRight, description: "7日价格涨跌幅" },
+  gain: { label: "涨幅", icon: ArrowUpRight, description: "7日价格涨跌幅（7日前成交价为基准）" },
   ssrSupply: { label: "SSR流通", icon: Coins, description: "SSR卡牌流通数量" },
 }
 
 export default function WeeklyRank() {
   const { selectCard } = useAppStore()
+  const navigate = useNavigate()
   const [dimension, setDimension] = useState<RankDimension>("composite")
   const [rankData, setRankData] = useState<CardRank[]>([])
-  const [prevRankData, setPrevRankData] = useState<CardRank[]>([])
+  const prevRankDataRef = useRef<CardRank[]>([])
   const [loading, setLoading] = useState(true)
 
   const fetchData = useCallback(async () => {
     try {
-      setLoading(true)
       const data = await api.getWeeklyRank(dimension)
-      setPrevRankData(rankData)
-      setRankData(data)
+      setRankData(prev => {
+        prevRankDataRef.current = prev
+        return data
+      })
     } catch {
     } finally {
       setLoading(false)
     }
-  }, [dimension, rankData])
+  }, [dimension])
 
   useEffect(() => {
+    setLoading(true)
     fetchData()
     const interval = setInterval(fetchData, 3000)
     return () => clearInterval(interval)
-  }, [fetchData])
+  }, [dimension, fetchData])
 
   const getRankChange = (cardId: string, currentRank: number) => {
-    const prevItem = prevRankData.find(r => r.cardId === cardId)
+    const prevItem = prevRankDataRef.current.find(r => r.cardId === cardId)
     if (!prevItem) return 0
     return prevItem.rank - currentRank
   }
@@ -108,7 +112,10 @@ export default function WeeklyRank() {
               return (
                 <div
                   key={item.cardId}
-                  onClick={() => selectCard(item.cardId)}
+                  onClick={() => {
+                    selectCard(item.cardId)
+                    navigate("/")
+                  }}
                   className="grid grid-cols-12 gap-2 px-4 py-3 hover:bg-hover/30 transition-colors cursor-pointer items-center"
                 >
                   <div className="col-span-1 text-center">
@@ -231,9 +238,9 @@ export default function WeeklyRank() {
         <ul className="text-xs text-dimmed space-y-1">
           <li>1. 综合排名 = 7日成交量 × 40% + 7日涨幅 × 35% + SSR流通数 × 25%</li>
           <li>2. 7日成交量：最近7天内该卡牌的累计成交数量</li>
-          <li>3. 7日涨幅：(最新成交价 - 7日前成交价) / 7日前成交价 × 100%</li>
+          <li>3. 7日涨幅：(最新成交价 - 7天前最后一笔成交价) / 7天前最后一笔成交价 × 100%；若无历史成交价则以基准价计算</li>
           <li>4. SSR流通数：当前用户持有的SSR卡牌总数（非SSR卡牌不参与此项）</li>
-          <li>5. 数据每3秒自动刷新，与交易记录实时同步</li>
+          <li>5. 数据每3秒自动刷新，与交易记录实时同步；点击卡牌行可跳转到交易大厅进行交易</li>
         </ul>
       </div>
     </div>
